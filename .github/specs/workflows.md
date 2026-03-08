@@ -1,4 +1,4 @@
-# Business Orchestration Workflows Specification
+# MCP Server Registry & Endpoint Workflows Specification
 
 **Version**: 1.0.0
 **Status**: Active
@@ -6,200 +6,193 @@
 
 ## Overview
 
-BusinessInfinity exposes purpose-driven, perpetual orchestration workflows via Azure Functions. Each workflow starts a long-running orchestration in which C-suite agents work toward a declared `purpose` indefinitely. Workflows are defined by `@app.workflow` decorators in `src/business_infinity/workflows.py` — no Azure Functions boilerplate is written here; the SDK provisions all triggers, auth, and Service Bus infrastructure.
+`aos-mcp-servers` exposes four HTTP endpoints that manage the lifecycle of config-driven MCP servers: list, lookup, tool invocation, and health. All servers are defined in a JSON registry and auto-registered with the Foundry Agent Service on first request.
 
 ## Scope
 
-- Core business orchestration workflows (`strategic-review`, `market-analysis`, `budget-approval`)
-- C-suite agent selection pattern
-- Reusable `c_suite_orchestration` workflow template
-- Orchestration update handler pattern
-- Workflow variants: perpetual (default), hierarchical, sequential
+- HTTP endpoint contracts (request, response, error shapes)
+- Registry loading and server initialization lifecycle
+- Foundry Agent Service registration pattern
+- Tool invocation routing
 
-## C-Suite Agent Selection
+## Endpoint Workflows
 
-All orchestration workflows rely on selecting the correct C-suite agents from the RealmOfAgents catalog before starting an orchestration.
+### `GET /api/mcp/servers` — List Servers
 
-### Agent Constants
+Returns all enabled MCP servers from the registry.
 
-```python
-C_SUITE_AGENT_IDS = ["ceo", "cfo", "cmo", "coo", "cto", "cso"]
-C_SUITE_TYPES = {"LeadershipAgent", "CMOAgent", "CEOAgent", "CFOAgent", "CTOAgent", "CSOAgent"}
-```
+| Step | Action |
+|------|--------|
+| 1 | `_load_registry()` — load JSON from `MCP_REGISTRY_PATH` (cached after first call) |
+| 2 | `_ensure_servers_initialized(registry)` — build transport instances for each enabled server |
+| 3 | `_ensure_foundry_registration(registry)` — register servers with Foundry Agent Service (idempotent) |
+| 4 | Filter by optional `?server_type=` query parameter |
+| 5 | Return `{"servers": [<MCPServerRegistryEntry.model_dump()>, ...]}` |
 
-### Selection Algorithm
+**Query parameters**:
 
-```python
-async def select_c_suite_agents(client: AOSClient) -> List[AgentDescriptor]:
-    all_agents = await client.list_agents()
-    by_id = {a.agent_id: a for a in all_agents}
-    # Prefer explicit IDs for deterministic selection
-    selected = [by_id[aid] for aid in C_SUITE_AGENT_IDS if aid in by_id]
-    if not selected:
-        # Fall back to agent_type matching if IDs not in catalog
-        selected = [a for a in all_agents if a.agent_type in C_SUITE_TYPES]
-    return selected
-```
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `server_type` | string | Optional filter: `stdio`, `streamable_http`, or `websocket` |
 
-**Rule**: Always prefer explicit `agent_id` matching. Fall back to `agent_type` only when no IDs are found. Raise `ValueError` when no agents are returned by either method.
-
-## Workflow Template
-
-`c_suite_orchestration` is a reusable `@workflow_template` that encapsulates the standard pattern: select agents → filter → validate → start orchestration.
-
-```python
-@workflow_template
-async def c_suite_orchestration(
-    request: WorkflowRequest,
-    agent_filter: Callable[[AgentDescriptor], bool],
-    purpose: str,
-    purpose_scope: str,
-) -> Dict[str, Any]:
-    agents = await select_c_suite_agents(request.client)
-    agent_ids = [a.agent_id for a in agents if agent_filter(a)]
-    if not agent_ids:
-        raise ValueError("No matching agents available in the catalog")
-    status = await request.client.start_orchestration(
-        agent_ids=agent_ids,
-        purpose=purpose,
-        purpose_scope=purpose_scope,
-        context=request.body,
-    )
-    return {"orchestration_id": status.orchestration_id, "status": status.status.value}
-```
-
-Use this template for any new workflow that follows the select → filter → orchestrate pattern.
-
-## Core Orchestration Workflows
-
-### `strategic-review`
-
-**Purpose**: Perpetual strategic alignment, review, and improvement across the organisation.
-
-| Attribute | Value |
-|-----------|-------|
-| Workflow name | `strategic-review` |
-| Agent selection | All C-suite agents (`agent_filter=lambda a: True`) |
-| Workflow variant | Default (perpetual) |
-| Purpose | `"Drive strategic review and continuous organisational improvement"` |
-| Purpose scope | `"C-suite strategic alignment and cross-functional coordination"` |
-
-**Request body**:
-
-```json
-{"quarter": "Q1-2026", "focus_areas": ["revenue", "growth"]}
-```
-
-**Response**:
-
-```json
-{"orchestration_id": "orch-abc123", "status": "running"}
-```
-
-### `market-analysis`
-
-**Purpose**: Continuous market monitoring, competitor analysis, and opportunity identification led by the CMO.
-
-| Attribute | Value |
-|-----------|-------|
-| Workflow name | `market-analysis` |
-| Agent selection | CMO agent (primary) + CEO (strategic oversight, if available) |
-| Workflow variant | `"hierarchical"` |
-| Purpose | `"Continuously analyse markets and surface competitive insights"` |
-| Purpose scope | `"Market intelligence, competitor monitoring, and opportunity identification"` |
-
-**Agent selection rule**: Select `CMOAgent` first; if CEO (`agent_id == "ceo"`) is available and not already selected, insert it at index 0.
-
-**Request body**:
-
-```json
-{"market": "EU SaaS", "competitors": ["AcmeCorp", "Globex"]}
-```
-
-**Response**:
-
-```json
-{"orchestration_id": "orch-xyz789", "status": "running"}
-```
-
-### `budget-approval`
-
-**Purpose**: Perpetual budget governance, spend monitoring, and financial decision oversight.
-
-| Attribute | Value |
-|-----------|-------|
-| Workflow name | `budget-approval` |
-| Agent selection | CEO (`agent_id == "ceo"`) + CFO (`agent_id == "cfo"`) |
-| Workflow variant | `"sequential"` |
-| Purpose | `"Govern budget allocation and ensure fiscal responsibility"` |
-| Purpose scope | `"Financial governance, budget oversight, and resource allocation"` |
-
-**Request body**:
-
-```json
-{"department": "Marketing", "amount": 500000, "justification": "Q2 campaign"}
-```
-
-**Response**:
-
-```json
-{"orchestration_id": "orch-def456", "status": "running"}
-```
-
-## Orchestration Update Handler
-
-Workflows may register a handler for intermediate agent updates via `@app.on_orchestration_update`. The `strategic-review` workflow registers one to log progress:
-
-```python
-@app.on_orchestration_update("strategic-review")
-async def handle_strategic_review_update(update) -> None:
-    logger.info(
-        "Strategic review update from agent %s: %s",
-        getattr(update, "agent_id", "unknown"),
-        getattr(update, "output", ""),
-    )
-```
-
-**Convention**: Update handlers log at `INFO` level. They must not raise exceptions as this would affect orchestration delivery.
-
-## Workflow Variants
-
-| Variant | `workflow=` parameter | When to use |
-|---------|----------------------|-------------|
-| Perpetual (default) | *(omit)* | General strategic and cross-functional orchestrations |
-| `hierarchical` | `"hierarchical"` | Analysis workflows where one agent leads and coordinates others |
-| `sequential` | `"sequential"` | Approval workflows requiring ordered agent participation |
-
-## Response Schema
-
-All orchestration-starting workflows return:
+**Response** (`200 OK`):
 
 ```json
 {
-    "orchestration_id": "<string>",
-    "status": "<OrchestrationStatus.value>"
+    "servers": [
+        {
+            "server_id": "context-server",
+            "server_type": "stdio",
+            "description": "Provides agent context and state management tools",
+            "enabled": true,
+            "tools": [{"name": "get_context", "description": "Retrieve the current agent execution context", "input_schema": {}}]
+        }
+    ]
 }
 ```
 
-Raise `ValueError` with a descriptive message when no agents match the selection criteria — never return an empty orchestration.
+---
+
+### `GET /api/mcp/servers/{server_id}` — Get Server
+
+Returns a single server descriptor by ID.
+
+**Response** (`200 OK`): full `MCPServerRegistryEntry` as JSON.
+
+**Error** (`404 Not Found`):
+
+```json
+{"error": "MCP server 'unknown-server' not found"}
+```
+
+---
+
+### `POST /api/mcp/servers/{server_id}/tools/{tool_name}` — Invoke Tool
+
+Invokes a named tool on the specified MCP server.
+
+**Request body**: JSON object of tool input parameters (may be empty `{}`).
+
+**Response** (`200 OK`): transport-specific result dict.
+
+```json
+{
+    "transport": "stdio",
+    "tool": "get_context",
+    "params": {"agent_id": "ceo"},
+    "result": null
+}
+```
+
+**Error** (`404 Not Found`) — server not found or not initialized:
+
+```json
+{"error": "MCP server 'unknown-server' not found or not initialized"}
+```
+
+**Error** (`404 Not Found`) — tool not found on server:
+
+```json
+{"error": "Tool 'unknown_tool' is not available on stdio server (command='python')"}
+```
+
+---
+
+### `GET /api/health` — Health Check
+
+Returns registry status. Used by Azure health probes.
+
+**Response** (`200 OK`):
+
+```json
+{
+    "app": "aos-mcp-servers",
+    "status": "healthy",
+    "servers_registered": 3,
+    "servers_enabled": 2
+}
+```
+
+**Response** (`503 Service Unavailable`) — registry load failed:
+
+```json
+{
+    "app": "aos-mcp-servers",
+    "status": "unhealthy",
+    "error": "<exception message>"
+}
+```
+
+## Initialization Lifecycle
+
+```
+HTTP request arrives
+       │
+       ▼
+_load_registry()               ← reads JSON once, cached in _registry
+       │
+       ▼
+_ensure_servers_initialized()  ← builds MCPStdioTool / MCPStreamableHTTPTool / MCPWebsocketTool
+       │                          for each enabled server (skips already-built instances)
+       ▼
+_ensure_foundry_registration() ← registers tools with FoundryAgentManager (once per process)
+```
+
+## Server Type Routing
+
+| `server_type` in registry | Transport class | Required fields |
+|---------------------------|----------------|-----------------|
+| `stdio` | `MCPStdioTool` | `command` |
+| `streamable_http` | `MCPStreamableHTTPTool` | `url` |
+| `websocket` | `MCPWebsocketTool` | `url` |
+
+Unsupported `server_type` values raise `ValueError` during initialization and are logged as warnings (the server is skipped).
+
+## Registry Configuration Pattern
+
+```json
+{
+    "mcp_servers": [
+        {
+            "server_id": "<unique-id>",
+            "server_type": "stdio | streamable_http | websocket",
+            "description": "<human-readable>",
+            "command": "<executable>",
+            "args": ["<arg1>"],
+            "env": {"KEY": "value"},
+            "url": "<http-or-ws-url>",
+            "headers": {"Authorization": "Bearer <token>"},
+            "gateway_url": "<ai-gateway-url>",
+            "tools": [
+                {"name": "<tool-name>", "description": "<desc>", "input_schema": {}}
+            ],
+            "enabled": true
+        }
+    ]
+}
+```
+
+Set `enabled: false` to deactivate a server without removing it from the registry.
 
 ## Validation
 
 ```bash
-# Run all workflow tests
-pytest tests/test_workflows.py -v
+# Run all tests
+pytest tests/ -v
 
-# Run workflow registration tests only
-pytest tests/test_workflows.py -v -k "registered"
+# Run endpoint/schema tests only
+pytest tests/test_mcp_servers.py -v
 
-# Lint workflows module
-pylint src/business_infinity/workflows.py
+# Run transport routing tests only
+pytest tests/test_mcp_routing.py -v
+
+# Lint
+pylint src/
 ```
 
 ## References
 
 → **Repository spec**: `.github/specs/repository.md`
-→ **Enterprise capabilities**: `.github/specs/enterprise-capabilities.md`
+→ **MCP Transport Capabilities Specification**: `.github/specs/mcp-transport-capabilities.md`
 → **Python standards**: `.github/instructions/python.instructions.md`
-→ **Azure Functions patterns**: `.github/instructions/azure-functions.instructions.md`
-→ **Architecture**: `/docs/specifications/architecture.md`
+→ **MCPServers instructions**: `.github/instructions/mcp-servers.instructions.md`
