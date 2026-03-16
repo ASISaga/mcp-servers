@@ -1,23 +1,17 @@
 # MCP submodules
-[submodule "mcp.asisaga.com"]
-	path = mcp-servers/mcp.asisaga.com
-	url = https://github.com/ASISaga/mcp.asisaga.com
 
-[submodule "ERPNext-MCP"]
-	path = mcp-servers/ERPNext-MCP
-	url = https://github.com/ASISaga/ERPNext-MCP
+[submodule "erpnext.asisaga.com"]
+	path = servers/erpnext.asisaga.com
+	url = https://github.com/ASISaga/erpnext.asisaga.com
 
-[submodule "spec-kit-mcp"]
-	path = mcp-servers/spec-kit-mcp
-	url = https://github.com/ASISaga/spec-kit-mcp
+[submodule "linkedin.asisaga.com"]
+	path = servers/linkedin.asisaga.com
+	url = https://github.com/ASISaga/linkedin.asisaga.com
 
-[submodule "linkedin-mcp-server"]
-	path = mcp-servers/linkedin-mcp-server
-	url = https://github.com/ASISaga/linkedin-mcp-server
+[submodule "reddit.asisaga.com"]
+	path = servers/reddit.asisaga.com
+	url = https://github.com/ASISaga/reddit.asisaga.com
 
-[submodule "mcp-reddit"]
-	path = mcp-servers/mcp-reddit
-	url = https://github.com/ASISaga/mcp-reddit
 [submodule "subconscious.asisaga.com"]
-	path = mcp-servers/subconscious.asisaga.com
+	path = servers/subconscious.asisaga.com
 	url = https://github.com/ASISaga/subconscious.asisaga.com
