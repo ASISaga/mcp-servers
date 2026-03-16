@@ -18,3 +18,6 @@
 [submodule "mcp-reddit"]
 	path = mcp-servers/mcp-reddit
 	url = https://github.com/ASISaga/mcp-reddit
+[submodule "subconscious.asisaga.com"]
+	path = mcp-servers/subconscious.asisaga.com
+	url = https://github.com/ASISaga/subconscious.asisaga.com
